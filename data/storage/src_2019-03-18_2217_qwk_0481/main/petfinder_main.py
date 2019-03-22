@@ -5,34 +5,25 @@
 
 # ## Added Image size features from [Extract Image Features](https://www.kaggle.com/kaerunantoka/extract-image-features)
 
-import gc
 import glob
-import os
-import json
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pprint
 import warnings
 
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import TruncatedSVD
 from joblib import Parallel, delayed
-from tqdm import tqdm, tqdm_notebook
-import cv2
 import os
 
-from src.data.make_dataset import read_train_data, read_test_data, resize_to_square, load_image
+from src.data.make_dataset import read_train_data, read_test_data
 from src.models.densenet import densenet_model, predict_using_img
 from src.features.build_features import adopt_svd, agg_feature, merge_labels_breed
-from src.features.word_parse import extract_additional_features, PetFinderParser, parse_tfidf
+from src.features.word_parse import extract_additional_features, parse_tfidf
 from src.features.Img_parse import agg_img_feature
 from src.models.xgb_model import run_xgb
 from src.models.metrics import OptimizedRounder, quadratic_weighted_kappa
 from src.result.summarize_result import storage_src
 from src.submission.submit_data import submit
 
-from data import input
+import input
 
 np.random.seed(seed=1337)
 warnings.filterwarnings('ignore')
@@ -55,8 +46,8 @@ def main():
                                     train,
                                     img_path=os.path.join(input.__path__[0], 'petfinder-adoption-prediction/train_images/'))
     test_feats = predict_using_img(dnet_model,
-                                    test,
-                                    img_path=os.path.join(input.__path__[0], 'petfinder-adoption-prediction/test_images/'))
+                                   test,
+                                   img_path=os.path.join(input.__path__[0], 'petfinder-adoption-prediction/test_images/'))
 
     all_ids = pd.concat([train, test], axis=0, ignore_index=True, sort=False)[['PetID']]
 

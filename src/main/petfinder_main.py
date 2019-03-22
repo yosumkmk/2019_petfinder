@@ -5,58 +5,118 @@
 
 # ## Added Image size features from [Extract Image Features](https://www.kaggle.com/kaerunantoka/extract-image-features)
 
-import gc
 import glob
-import os
-import json
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pprint
 import warnings
 
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import TruncatedSVD
 from joblib import Parallel, delayed
-from tqdm import tqdm, tqdm_notebook
-import cv2
 import os
 
-from src.data.make_dataset import read_train_data, read_test_data, resize_to_square, load_image
+# os.environ["CUDA_DEVICE_ORDER"] = 'PCI_BUS_ID'
+# os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+import pickle
+import random
+
+from sklearn.preprocessing import MinMaxScaler
+
+from src.data.make_dataset import read_train_data, read_test_data
 from src.models.densenet import densenet_model, predict_using_img
-from src.features.build_features import adopt_svd, agg_feature, merge_labels_breed
-from src.features.word_parse import extract_additional_features, PetFinderParser, parse_tfidf
+from src.features.build_features import adopt_svd, agg_feature, merge_labels_breed, merge_labels_state, add_feature
+from src.features.build_features import fill_and_drop_feature, fill_and_drop_feature_end
+from src.features.word_parse import extract_additional_features, parse_tfidf
 from src.features.Img_parse import agg_img_feature
-from src.models.xgb_model import run_xgb
+from src.models.xgb_model import run_xgb, xgb_tuning
 from src.models.metrics import OptimizedRounder, quadratic_weighted_kappa
 from src.result.summarize_result import storage_src
 from src.submission.submit_data import submit
+from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 
-from data import input
+import input
 
 np.random.seed(seed=1337)
+random_state = 1337
 warnings.filterwarnings('ignore')
 
 split_char = '/'
 
+xgb_params = {
+    'eval_metric': 'rmse',
+    'object': 'reg:squarederror',
+    'seed': 1337,
+    'n_estimators': 794,
+    'max_depth': 7,
+    'eta': 0.009,
+    'gamma': 0.95,
+    'subsample': 1,
+    'min_child_weight': 5.5,
+    'colsample_bytree': 0.5,
+    'tree_method': 'gpu_hist',
+    'device': 'gpu',
+    'silent': 1,
+    'booster': 'gbtree'
+}
+
+space_params = {
+    'n_estimators': hp.quniform('n_estimators', 100, 1000, 1),
+    'eta': hp.quniform('eta', 0.005, 0.5, 0.001),
+    # A problem with max_depth casted to float instead of int with
+    # the hp.quniform method.
+    'max_depth': hp.choice('max_depth', np.arange(1, 14, dtype=int)),
+    'min_child_weight': hp.quniform('min_child_weight', 1, 6, 0.5),
+    'subsample': hp.quniform('subsample', 0.5, 1, 0.02),
+    'gamma': hp.quniform('gamma', 0.5, 1, 0.05),
+    'colsample_bytree': hp.quniform('colsample_bytree', 0.5, 1, 0.01),
+    'eval_metric': 'rmse',
+    'object': 'reg:squarederror',
+    # Increase this number if you have more cores. Otherwise, remove it and it will default
+    # to the maxium number.
+    'nthread': 10,
+    'booster': 'gbtree',
+    'tree_method': 'gpu_hist',
+    'device': 'gpu',
+    'silent': 1,
+    'seed': random_state
+}
+
 img_size = 256
 batch_size = 256
 
-def storage_process(submission, str_metric_score, scores, feature_score):
+densenet_predict = False
+exe_extract_additional_feature = False
+adoption_shuffle = False
+tuning_model = False
+adoption_change =True
+
+def storage_process(submission, str_metric_score, score, second_score, feature_score):
     submit(submission, str_metric_score)
-    comment = 'add 5 max min feature before standard scale'
-    storage_src(str_metric_score, scores, feature_score, comment)
+    comment = 'adoption replace,'
+    storage_src(str_metric_score, score, second_score, feature_score, comment, adoption_shuffle)
+
 
 def main():
     train = read_train_data(path=os.path.join(input.__path__[0], 'petfinder-adoption-prediction/train/'))
     test = read_test_data(path=os.path.join(input.__path__[0], 'petfinder-adoption-prediction/test/'))
-    dnet_model = densenet_model(weight_path=os.path.join(input.__path__[0], 'pre_trained_model/DenseNet-BC-121-32-no-top.h5'))
-    train_feats = predict_using_img(dnet_model,
-                                    train,
-                                    img_path=os.path.join(input.__path__[0], 'petfinder-adoption-prediction/train_images/'))
-    test_feats = predict_using_img(dnet_model,
-                                    test,
-                                    img_path=os.path.join(input.__path__[0], 'petfinder-adoption-prediction/test_images/'))
+    if adoption_shuffle:
+        train['AdoptionSpeed'] = random.sample(train['AdoptionSpeed'].values.tolist(), len(train))
+    if adoption_change:
+        train['AdoptionSpeed'].replace({0:0, 1:7, 2:30, 3:90, 4:200}, inplace=True)
+
+    if densenet_predict:
+        dnet_model = densenet_model(weight_path=os.path.join(input.__path__[0], 'densenet-keras/DenseNet-BC-121-32-no-top.h5'))
+        train_feats = predict_using_img(dnet_model,
+                                        train,
+                                        img_path=os.path.join(input.__path__[0], 'petfinder-adoption-prediction/train_images/'))
+        test_feats = predict_using_img(dnet_model,
+                                       test,
+                                       img_path=os.path.join(input.__path__[0], 'petfinder-adoption-prediction/test_images/'))
+        train_feats.to_pickle('densenet_train_predict.pkl')
+        test_feats.to_pickle('densenet_test_predict.pkl')
+    else:
+        with open('./densenet_train_predict.pkl', 'rb') as f:
+            train_feats = pickle.load(f)
+        with open('./densenet_test_predict.pkl', 'rb') as f:
+            test_feats = pickle.load(f)
 
     all_ids = pd.concat([train, test], axis=0, ignore_index=True, sort=False)[['PetID']]
 
@@ -65,8 +125,8 @@ def main():
     img_features = pd.concat([all_ids, svd_col], axis=1)
 
     labels_breed = pd.read_csv(os.path.join(input.__path__[0], 'petfinder-adoption-prediction/breed_labels.csv'))
-    labels_state = pd.read_csv(os.path.join(input.__path__[0], 'petfinder-adoption-prediction/color_labels.csv'))
-    labels_color = pd.read_csv(os.path.join(input.__path__[0], 'petfinder-adoption-prediction/state_labels.csv'))
+    labels_color = pd.read_csv(os.path.join(input.__path__[0], 'petfinder-adoption-prediction/color_labels.csv'))
+    labels_state = pd.read_csv(os.path.join(input.__path__[0], 'my_state_labels/my_state_labels.csv'))
 
     train_image_files = sorted(glob.glob(os.path.join(input.__path__[0], 'petfinder-adoption-prediction/train_images/*.jpg')))
     train_metadata_files = sorted(glob.glob(os.path.join(input.__path__[0], 'petfinder-adoption-prediction/train_metadata/*.json')))
@@ -75,81 +135,59 @@ def main():
     test_image_files = sorted(glob.glob(os.path.join(input.__path__[0], 'petfinder-adoption-prediction/test_images/*.jpg')))
     test_metadata_files = sorted(glob.glob(os.path.join(input.__path__[0], 'petfinder-adoption-prediction/test_metadata/*.json')))
     test_sentiment_files = sorted(glob.glob(os.path.join(input.__path__[0], 'petfinder-adoption-prediction/test_sentiment/*.json')))
-    train_df_ids = train[['PetID']]
 
     # Metadata:
     train_df_metadata = pd.DataFrame(train_metadata_files)
     train_df_metadata.columns = ['metadata_filename']
-    train_metadata_pets = train_df_metadata['metadata_filename'].apply(lambda x: x.split(split_char)[-1].split('-')[0])
-    train_df_metadata = train_df_metadata.assign(PetID=train_metadata_pets)
-    pets_with_metadatas = len(np.intersect1d(train_metadata_pets.unique(), train_df_ids['PetID'].unique()))
-
-    # Sentiment:
-    train_df_ids = train[['PetID']]
     train_df_sentiment = pd.DataFrame(train_sentiment_files)
     train_df_sentiment.columns = ['sentiment_filename']
-    train_sentiment_pets = train_df_sentiment['sentiment_filename'].apply(lambda x: x.split(split_char)[-1].split('.')[0])
-    train_df_sentiment = train_df_sentiment.assign(PetID=train_sentiment_pets)
-    print(len(train_sentiment_pets.unique()))
-
-    pets_with_sentiments = len(np.intersect1d(train_sentiment_pets.unique(), train_df_ids['PetID'].unique()))
-    print(f'fraction of pets with sentiment: {pets_with_sentiments / train_df_ids.shape[0]:.3f}')
-
-    # Images:
-    test_df_ids = test[['PetID']]
-    print(test_df_ids.shape)
-
     # Metadata:
     test_df_metadata = pd.DataFrame(test_metadata_files)
     test_df_metadata.columns = ['metadata_filename']
-    test_metadata_pets = test_df_metadata['metadata_filename'].apply(lambda x: x.split(split_char)[-1].split('-')[0])
-    test_df_metadata = test_df_metadata.assign(PetID=test_metadata_pets)
-    print(len(test_metadata_pets.unique()))
-
-    pets_with_metadatas = len(np.intersect1d(test_metadata_pets.unique(), test_df_ids['PetID'].unique()))
-    print(f'fraction of pets with metadata: {pets_with_metadatas / test_df_ids.shape[0]:.3f}')
-
-    # Sentiment:
     test_df_sentiment = pd.DataFrame(test_sentiment_files)
     test_df_sentiment.columns = ['sentiment_filename']
-    test_sentiment_pets = test_df_sentiment['sentiment_filename'].apply(lambda x: x.split(split_char)[-1].split('.')[0])
-    test_df_sentiment = test_df_sentiment.assign(PetID=test_sentiment_pets)
-    print(len(test_sentiment_pets.unique()))
 
-    pets_with_sentiments = len(np.intersect1d(test_sentiment_pets.unique(), test_df_ids['PetID'].unique()))
-    print(f'fraction of pets with sentiment: {pets_with_sentiments / test_df_ids.shape[0]:.3f}')
-
-    debug = False
     train_pet_ids = train.PetID.unique()
     test_pet_ids = test.PetID.unique()
 
-    if debug:
-        train_pet_ids = train_pet_ids[:1000]
-        test_pet_ids = test_pet_ids[:500]
+    if exe_extract_additional_feature:
+        dfs_train = Parallel(n_jobs=12, verbose=1)(
+            delayed(extract_additional_features)(i, mode='train') for i in train_pet_ids)
+        dfs_test = Parallel(n_jobs=12, verbose=1)(
+            delayed(extract_additional_features)(i, mode='test') for i in test_pet_ids)
+        train_dfs_sentiment = [x[0] for x in dfs_train if isinstance(x[0], pd.DataFrame)]
+        train_dfs_metadata = [x[1] for x in dfs_train if isinstance(x[1], pd.DataFrame)]
+        train_dfs_sentiment = pd.concat(train_dfs_sentiment, ignore_index=True, sort=False)
+        train_dfs_metadata = pd.concat(train_dfs_metadata, ignore_index=True, sort=False)
+        test_dfs_sentiment = [x[0] for x in dfs_test if isinstance(x[0], pd.DataFrame)]
+        test_dfs_metadata = [x[1] for x in dfs_test if isinstance(x[1], pd.DataFrame)]
+        test_dfs_sentiment = pd.concat(test_dfs_sentiment, ignore_index=True, sort=False)
+        test_dfs_metadata = pd.concat(test_dfs_metadata, ignore_index=True, sort=False)
+        train_dfs_metadata.to_pickle('train_dfs_metadata.pkl')
+        train_dfs_sentiment.to_pickle('train_dfs_sentiment.pkl')
+        test_dfs_metadata.to_pickle('test_dfs_metadata.pkl')
+        test_dfs_sentiment.to_pickle('test_dfs_sentiment.pkl')
 
-    dfs_train = Parallel(n_jobs=12, verbose=1)(
-        delayed(extract_additional_features)(i, mode='train') for i in train_pet_ids)
-
-    train_dfs_sentiment = [x[0] for x in dfs_train if isinstance(x[0], pd.DataFrame)]
-    train_dfs_metadata = [x[1] for x in dfs_train if isinstance(x[1], pd.DataFrame)]
-
-    train_dfs_sentiment = pd.concat(train_dfs_sentiment, ignore_index=True, sort=False)
-    train_dfs_metadata = pd.concat(train_dfs_metadata, ignore_index=True, sort=False)
-
-    dfs_test = Parallel(n_jobs=12, verbose=1)(
-        delayed(extract_additional_features)(i, mode='test') for i in test_pet_ids)
-
-    test_dfs_sentiment = [x[0] for x in dfs_test if isinstance(x[0], pd.DataFrame)]
-    test_dfs_metadata = [x[1] for x in dfs_test if isinstance(x[1], pd.DataFrame)]
-
-    test_dfs_sentiment = pd.concat(test_dfs_sentiment, ignore_index=True, sort=False)
-    test_dfs_metadata = pd.concat(test_dfs_metadata, ignore_index=True, sort=False)
+    else:
+        with open('./train_dfs_metadata.pkl', 'rb') as f:
+            train_dfs_metadata = pickle.load(f)
+        with open('./train_dfs_sentiment.pkl', 'rb') as f:
+            train_dfs_sentiment = pickle.load(f)
+        with open('./test_dfs_metadata.pkl', 'rb') as f:
+            test_dfs_metadata = pickle.load(f)
+        with open('./test_dfs_sentiment.pkl', 'rb') as f:
+            test_dfs_sentiment = pickle.load(f)
 
     # ### group extracted features by PetID:
     train_proc = agg_feature(train, train_dfs_metadata, train_dfs_sentiment)
     test_proc = agg_feature(test, test_dfs_metadata, test_dfs_sentiment)
     train_proc = merge_labels_breed(train_proc, labels_breed)
     test_proc = merge_labels_breed(test_proc, labels_breed)
+    train_proc, test_proc = merge_labels_state(train_proc, test_proc, labels_state)
+    train_proc = fill_and_drop_feature(train_proc)
+    test_proc = fill_and_drop_feature(test_proc)
+    train_proc = add_feature(train_proc)
+    test_proc = add_feature(test_proc)
 
     X = pd.concat([train_proc, test_proc], ignore_index=True, sort=False)
     X_temp = X.copy()
@@ -163,7 +201,10 @@ def main():
     X_temp = X_temp.merge(rescuer_count, how='left', on='RescuerID')
 
     for i in categorical_columns:
-        X_temp.loc[:, i] = pd.factorize(X_temp.loc[:, i])[0]
+        try:
+            X_temp.loc[:, i] = pd.factorize(X_temp.loc[:, i])[0]
+        except:
+            pass
 
     X_text = X_temp[text_columns]
     for i in X_text.columns:
@@ -175,7 +216,6 @@ def main():
     X_temp = parse_tfidf(X_temp, X_text)
 
     X_temp = X_temp.merge(img_features, how='left', on='PetID')
-
 
     agg_train_imgs = agg_img_feature(train_image_files)
     agg_test_imgs = agg_img_feature(test_image_files)
@@ -202,37 +242,40 @@ def main():
     X_test_non_null = X_test.fillna(-1)
     X_train_non_null.isnull().any().any(), X_test_non_null.isnull().any().any()
 
-    xgb_params = {
-        'eval_metric': 'rmse',
-        'seed': 1337,
-        'eta': 0.0123,
-        'subsample': 0.8,
-        'colsample_bytree': 0.85,
-        'tree_method': 'gpu_hist',
-        'device': 'gpu',
-        'silent': 1,
-    }
-    model, oof_train, oof_test, feature_score = run_xgb(xgb_params, X_train_non_null, X_test_non_null)
+    X_train_non_null = fill_and_drop_feature_end(X_train_non_null)
+    X_test_non_null = fill_and_drop_feature_end(X_test_non_null)
 
-    optR = OptimizedRounder()
-    optR.fit(oof_train, X_train['AdoptionSpeed'].values)
-    coefficients = optR.coefficients()
-    valid_pred = optR.predict(oof_train, coefficients)
-    qwk = quadratic_weighted_kappa(X_train['AdoptionSpeed'].values, valid_pred)
-    print("QWK = ", qwk)
+    X_train_non_null.to_csv('./X_train.csv')
 
-    coefficients_ = coefficients.copy()
-    coefficients_[0] = 1.66
-    coefficients_[1] = 2.13
-    coefficients_[3] = 2.85
-    train_predictions = optR.predict(oof_train, coefficients_).astype(np.int8)
-    test_predictions = optR.predict(oof_test.mean(axis=1), coefficients_).astype(np.int8)
+    if tuning_model:
+        best_params = xgb_tuning(space_params, X_train_non_null, X_test_non_null)
+        print(best_params)
+    else:
+        model, oof_train, oof_test, feature_score = run_xgb(xgb_params, X_train_non_null, X_test_non_null)
+        mmscaler = MinMaxScaler()
+        oof_train = mmscaler.fit_transform(oof_train) * 4
+        oof_test = mmscaler.transform(oof_test) * 4
+        optR = OptimizedRounder()
+        optR.fit(oof_train, X_train['AdoptionSpeed'].values)
+        coefficients = optR.coefficients()
+        valid_pred = optR.predict(oof_train, coefficients)
+        qwk = quadratic_weighted_kappa(X_train['AdoptionSpeed'].values, valid_pred)
+        print("QWK = ", qwk)
 
-    submission = pd.DataFrame({'PetID': test['PetID'].values, 'AdoptionSpeed': test_predictions})
-    submission.to_csv('submission.csv', index=False)
-    str_metric_score = 'qwk' + '_0' + str(int(qwk * 1000))
-    storage_process(submission, str_metric_score, qwk, feature_score)
+        coefficients_ = coefficients.copy()
+        coefficients_[0] = 1.66
+        coefficients_[1] = 2.13
+        coefficients_[3] = 2.85
+        train_predictions = optR.predict(oof_train, coefficients_).astype(np.int8)
+        test_predictions = optR.predict(oof_test.mean(axis=1), coefficients_).astype(np.int8)
 
+        valid_pred = optR.predict(oof_train, coefficients_)
+        qwk_change = quadratic_weighted_kappa(X_train['AdoptionSpeed'].values, valid_pred)
+        print("QWK_change = ", qwk_change)
+        submission = pd.DataFrame({'PetID': test['PetID'].values, 'AdoptionSpeed': test_predictions})
+        submission.to_csv('submission.csv', index=False)
+        str_metric_score = 'qwk' + '_0' + str(int(qwk * 100000))
+        storage_process(submission, str_metric_score, qwk, qwk_change, feature_score)
 
 
 if __name__ == '__main__':

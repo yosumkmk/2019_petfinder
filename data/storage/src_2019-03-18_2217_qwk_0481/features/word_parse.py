@@ -5,13 +5,10 @@ import numpy as np
 import pandas as pd
 import glob
 from src.util.log_util import set_logger
-from logging import StreamHandler, Formatter, getLogger, FileHandler, DEBUG, INFO, ERROR
-from sklearn.preprocessing import StandardScaler
-from src.data.make_dataset import read_permutation_importance
 from sklearn.decomposition import TruncatedSVD
 import json
 from sklearn.feature_extraction.text import TfidfVectorizer
-from data import input
+import input
 import os
 
 logger = set_logger(__name__)

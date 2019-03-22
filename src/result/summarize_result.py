@@ -26,14 +26,18 @@ def insert_result_to_csv(score_df):
     summary_df = pd.concat([summary_df, score_df], axis=0)
     summary_df.to_csv(os.path.join(result_summary.__path__[0], 'summary_scores.csv'), index=False)
 
-def storage_src(str_metric_score, scores, feature_importance, comment=''):
+def storage_src(str_metric_score, scores, second_score, feature_importance, comment='', adoption_shuffle=False):
     copy_dir_name = 'src_' + str_datetime() + '_' + str_metric_score
     scores = pd.DataFrame({'qwk':scores}, index=[0])
+    scores['qwk_change'] = second_score
     scores['dir_name'] = copy_dir_name
     scores['datetime'] = datetime.datetime.now()
     scores['txt'] = comment
-    scores.to_csv(os.path.join(os.path.dirname(__file__), 'scores.scv',), index=False)
-    feature_importance.to_csv(os.path.join(os.path.dirname(__file__), 'feature_importance.scv'), index=False)
+    scores.to_csv(os.path.join(os.path.dirname(__file__), 'scores.csv',), index=False)
+    if adoption_shuffle:
+        feature_importance.to_csv(os.path.join(os.path.dirname(__file__), 'feature_importance_shuffle.csv'), index=False)
+    else:
+        feature_importance.to_csv(os.path.join(os.path.dirname(__file__), 'feature_importance.csv'), index=False)
     origin_directory = src.__path__[0]
     insertion_directory = os.path.join(data.__path__[0], 'storage', copy_dir_name)
     shutil.copytree(origin_directory, insertion_directory)

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import warnings
+
 warnings.filterwarnings('ignore')
 import numpy as np
 import pandas as pd
@@ -14,8 +15,58 @@ import json
 logger = set_logger(__name__)
 
 
-def agg_feature(data, data_metadata, data_sentiment):
+def fill_and_drop_feature(data):
+    data.drop(['main_breed_BreedName', 'second_breed_BreedName'], axis=1, inplace=True)
+    data[((data['main_breed_Type'] != data['second_breed_Type'])
+          & (~np.isnan(data['second_breed_Type'])))]['main_breed_Type'] = \
+        data[((data['main_breed_Type'] != data['second_breed_Type'])
+              & (~np.isnan(data['second_breed_Type'])))]['second_breed_Type']
+    data[((data['main_breed_Type'] != data['second_breed_Type'])
+          & (~np.isnan(data['second_breed_Type'])))]['second_breed_Type'] = np.nan
+    return data
 
+
+def fill_and_drop_feature_end(data):
+    data.drop([
+        # 'main_state_West_East', 'main_state_States_Federal',
+        # 'main_breed_Type', 'second_breed_Type',
+        'main_state_State',
+        # 'VideoAmt', 'metadata_crop_conf_MEAN', 'metadata_crop_conf_SUM',
+        # 'metadata_crop_importance_SUM', 'metadata_crop_conf_VAR'
+    ], axis=1, inplace=True)
+    # data.drop(['image_size_sum', 'image_size_mean', 'image_size_var',
+    # 'width_sum', 'width_mean', 'width_var',
+    # 'height_sum', 'height_mean', 'height_var'
+    # ], axis=1, inplace=True)
+    return data
+
+
+def add_feature(data):
+    data['mixed_Breed'] = -1
+    data['mixed_Breed'] = np.where((data['Breed1'] != data['Breed2'])
+                                   & ~np.isnan(data['Breed1'])
+                                   & ~np.isnan(data['Breed2']), 1, data['mixed_Breed'])
+    data['mixed_Breed'] = np.where((((data['Breed1'] == data['Breed2'])
+                                     & ((data['Breed1'] == 370)))
+                                    | ((data['Breed1'] == 370) & (np.isnan(data['Breed2'])))
+                                    | ((data['Breed2'] == 370) & (np.isnan(data['Breed1']))))
+                                   , 0, data['mixed_Breed'])
+    data['mixed_Breed'] = np.where(((data['Breed1'] == data['Breed2'])
+                                    & (data['Breed1'] != 370)), 2, data['mixed_Breed'])
+    data['mixed_Breed'] = np.where((((data['Breed1'] != data['Breed2'])
+                                     & (~np.isnan(data['Breed1']))
+                                     & (~np.isnan(data['Breed2'])))
+                                    & (((data['Breed1'] != 370) & (data['Breed2'] == 370))
+                                       | ((data['Breed2'] == 370) & (data['Breed1'] == 370))))
+                                   , 3, data['mixed_Breed'])
+    # data['State'] = data['State'].factorize()[0]
+    # State_dummies = pd.get_dummies(data['State'].reset_index())
+    # State_dummies.columns = ['State_' + str(i) for i in range(len(State_dummies.columns))]
+    # data = pd.concat([data, State_dummies], axis=1)
+    return data
+
+
+def agg_feature(data, data_metadata, data_sentiment):
     aggregates = ['sum', 'mean', 'var']
     sent_agg = ['sum']
 
@@ -58,6 +109,7 @@ def agg_feature(data, data_metadata, data_sentiment):
     assert data_proc.shape[0] == data.shape[0]
     return data_proc
 
+
 def merge_labels_breed(data_proc, labels_breed):
     data_breed_main = data_proc[['Breed1']].merge(labels_breed, how='left', left_on='Breed1', right_on='BreedID', suffixes=('', '_main_breed'))
     data_breed_main = data_breed_main.iloc[:, 2:]
@@ -67,6 +119,23 @@ def merge_labels_breed(data_proc, labels_breed):
     data_breed_second = data_breed_second.add_prefix('second_breed_')
     data_proc = pd.concat([data_proc, data_breed_main, data_breed_second], axis=1)
     return data_proc
+
+
+def merge_labels_state(train_proc, test_proc, labels_state):
+    # State_count = train_proc.groupby(['State'])['PetID'].count().reset_index()
+    # State_count.columns = ['State', 'State_count']
+    # labels_state = labels_state.merge(State_count, left_on='StateID', right_on='State')
+    # labels_state['State_count'] = labels_state['State_count'] / len(train_proc) * 100
+    train_state_main = train_proc[['State']].merge(labels_state, how='left', left_on='State', right_on='StateID', suffixes=('', '_main_state'))
+    train_state_main.drop(['StateID', 'StateName'], axis=1, inplace=True)
+    train_state_main = train_state_main.add_prefix('main_state_')
+    train_proc = pd.concat([train_proc, train_state_main], axis=1)
+    test_state_main = test_proc[['State']].merge(labels_state, how='left', left_on='State', right_on='StateID', suffixes=('', '_main_state'))
+    test_state_main.drop(['StateID', 'StateName'], axis=1, inplace=True)
+    test_state_main = test_state_main.add_prefix('main_state_')
+    test_proc = pd.concat([test_proc, test_state_main], axis=1)
+    return train_proc, test_proc
+
 
 def adopt_svd(train_feats, test_feats):
     n_components = 32
@@ -80,6 +149,7 @@ def adopt_svd(train_feats, test_feats):
     svd_col = svd_col.add_prefix('IMG_SVD_')
     return svd_col
 
+
 def max_min_feature(train_df, test_df, idx):
     num_list = np.arange(5)
     for num in num_list:
@@ -91,11 +161,12 @@ def max_min_feature(train_df, test_df, idx):
             sum_min_top = df['sum_min_top' + str(num)].values
             for i in range(len(df)):
                 sort_values = np.sort(use_values[i])
-                sum_max_top[i] = sort_values[-(num+1)]
+                sum_max_top[i] = sort_values[-(num + 1)]
                 sum_min_top[i] = sort_values[num]
             df['sum_max_top' + str(num)] = sum_max_top
             df['sum_min_top' + str(num)] = sum_min_top
     return train_df, test_df
+
 
 def id_match_feature(train_df, test_df, idx):
     train_df['ID_num'] = [int(train_df['ID_code'][x][6::]) for x in range(len(train_df))]
@@ -104,11 +175,13 @@ def id_match_feature(train_df, test_df, idx):
         df['ID_match'] = np.sum(df[idx] == np.tile((df['ID_num'].values / 10 ** 4).reshape(-1, 1), (1, len(idx))), axis=1)
         df.drop('ID_num', inplace=True)
 
+
 def round_feature(train_df, test_df, idx):
     for df in [test_df, train_df]:
         for feat in idx:
             df[feat] = np.round(df[feat], 3)
             df[feat] = np.round(df[feat], 3)
+
 
 def outlier_distribution_categorize(train_df, test_df, idx):
     outlier_dict = {}
@@ -133,6 +206,7 @@ def outlier_distribution_categorize(train_df, test_df, idx):
                 test_df[k + '_outlier_' + str(o)] = (np.round(test_df[k], 2) == o).astype(np.int64)
     return train_df, test_df
 
+
 def process_data(train_df, test_df):
     logger.info('Features engineering')
     idx = [c for c in train_df.columns if c not in ['ID_code', 'target']]
@@ -150,6 +224,7 @@ def process_data(train_df, test_df):
 
     print('Train and test shape:', train_df.shape, test_df.shape)
     return train_df, test_df
+
 
 if __name__ == '__main__':
     pass

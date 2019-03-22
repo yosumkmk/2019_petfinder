@@ -99,12 +99,6 @@ def quadratic_weighted_kappa(y, y_pred):
 
     return (1.0 - numerator / denominator)
 
-
-# ### OptimizeRounder from [OptimizedRounder() - Improved](https://www.kaggle.com/naveenasaithambi/optimizedrounder-improved)
-
-# In[115]:
-
-
 class OptimizedRounder(object):
     def __init__(self):
         self.coef_ = 0

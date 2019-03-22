@@ -3,11 +3,10 @@ import warnings
 from src.util.log_util import set_logger
 import pandas as pd
 warnings.filterwarnings('ignore')
-from logging import StreamHandler, Formatter, getLogger, FileHandler, DEBUG, INFO, ERROR
 import numpy as np
 import os
-import data.input
-from keras.applications.densenet import preprocess_input, DenseNet121
+import input
+from keras.applications.densenet import preprocess_input
 
 import cv2
 
@@ -46,12 +45,12 @@ def load_image(path, pet_id):
 
 
 #############
-def read_train_data(path=data.input.__path__[0] ,nrows=None):
+def read_train_data(path=input.__path__[0], nrows=None):
     logger.info('Input train_data')
     train_df = pd.read_csv(os.path.join(path, 'train.csv'), nrows=nrows)
     return train_df
 
-def read_test_data(path=data.input.__path__[0]):
+def read_test_data(path=input.__path__[0]):
     logger.info('Input test_data')
     test_df = pd.read_csv(os.path.join(path, 'test.csv'))
     return test_df
