@@ -11,9 +11,135 @@ from sklearn.preprocessing import StandardScaler
 from src.data.make_dataset import read_permutation_importance
 from sklearn.decomposition import TruncatedSVD
 import json
+import gensim
+import input
+import os
+import inflection
 
 logger = set_logger(__name__)
 
+
+def name_word2vec(train, test, model, random_state=1337):
+    # n_components = 7
+    # svd_ = TruncatedSVD(n_components=n_components, random_state=random_state)
+    # name_vec_array = np.zeros((len(train), 300))
+    # name_array = train.Name.values
+    # for i, w in enumerate(name_array):
+    #     name_list = w.split(' ')
+    #     for n in name_list:
+    #         try:
+    #             name_vec_array[i, :] += model.word_vec(inflection.singularize(n).lower())
+    #         except:
+    #             print(inflection.singularize(n).lower())
+    # insert_name_vec_array = svd_.fit_transform(name_vec_array)
+    # name_vec_df = pd.DataFrame(insert_name_vec_array)
+    # name_vec_df.columns = ['name_vec_' + str(x) for x in range(n_components)]
+    # train = pd.concat([train, name_vec_df], axis=1)
+    #
+    # name_vec_array = np.zeros((len(test), 300))
+    # name_array = test.Name.values
+    # for i, w in enumerate(name_array):
+    #     name_list = w.split(' ')
+    #     for n in name_list:
+    #         try:
+    #             name_vec_array[i, :] += model.word_vec(inflection.singularize(n).lower())
+    #         except:
+    #             print(inflection.singularize(n).lower())
+    # insert_name_vec_array = svd_.fit_transform(name_vec_array)
+    # name_vec_df = pd.DataFrame(insert_name_vec_array)
+    # name_vec_df.columns = ['name_vec_' + str(x) for x in range(n_components)]
+    # test = pd.concat([test, name_vec_df], axis=1)
+    return train, test
+
+def metadata_desc_word2vec(data, model, random_state=1337):
+    n_components = 7
+    svd_ = TruncatedSVD(n_components=n_components, random_state=random_state)
+    for d in range(len(data)):
+        word_list = [inflection.singularize(x) for x in data['metadata_annots_top_desc'][d].split(' ')]
+        word_set = set(word_list)
+        desc_vec_array = np.zeros((len(data), 300))
+        for i, w in enumerate(word_set):
+            try:
+                desc_vec_array[d, :] += model.word_vec(w.lower())
+            except:
+                print(w.lower())
+    insert_name_vec_array = svd_.fit_transform(desc_vec_array)
+    desc_vec_df = pd.DataFrame(insert_name_vec_array)
+    desc_vec_df.columns = ['desc_' + str(x) for x in range(n_components)]
+    data = pd.concat([data, desc_vec_df], axis=1)
+    return data
+
+def sentiment_entities_word2vec(data, model, random_state=1337):
+    n_components = 7
+    svd_ = TruncatedSVD(n_components=n_components, random_state=random_state)
+    for d in range(len(data)):
+        word_list = [inflection.singularize(x) for x in data['sentiment_entities'][d].split(' ')]
+        word_set = set(word_list)
+        desc_vec_array = np.zeros((len(data), 300))
+        for i, w in enumerate(word_set):
+            try:
+                desc_vec_array[d, :] += model.word_vec(w.lower())
+            except:
+                print(w.lower())
+    insert_name_vec_array = svd_.fit_transform(desc_vec_array)
+    desc_vec_df = pd.DataFrame(insert_name_vec_array)
+    desc_vec_df.columns = ['sentiment_entities_' + str(x) for x in range(n_components)]
+    data = pd.concat([data, desc_vec_df], axis=1)
+    return data
+
+def metadata_Breed(data, breed_label):
+    breed_array = np.zeros((len(data), 370))
+    for i in range(len(data)):
+        word_list2 = set([inflection.singularize(x) for x in data['metadata_annots_top_desc'][i].split(' ')])
+        for c, bn in enumerate([inflection.singularize(x).lower() for x in breed_label.BreedName.values]):
+            breed_array[i, c] = int(bn in word_list2)
+    metadata_breed = pd.DataFrame(breed_array)
+    metadata_breed.columns = ['metadata_breed_' + str(x) for x in range(breed_array.shape[1])]
+    data = pd.concat([data, metadata_breed], axis=1)
+    return data
+
+def metadata_Breed2(data, breed_label):
+    breed_array = np.zeros((len(data), 15))
+    for i in range(len(data)):
+        word_list2 = set([inflection.singularize(x) for x in data['metadata_annots_top_desc'][i].split(' ')])
+        col_num = 0
+        for c, bn in enumerate([inflection.singularize(x).lower() for x in breed_label.BreedName.values]):
+            if bn in word_list2:
+                breed_array[i, col_num] = c
+                col_num += 1
+    metadata_breed = pd.DataFrame(breed_array)
+    metadata_breed.columns = ['metadata_breed_' + str(x) for x in range(breed_array.shape[1])]
+    data = pd.concat([data, metadata_breed], axis=1)
+    return data
+
+def metadata_color(data):
+#     color_list = ['white', 'black', 'red', 'pink', 'orange', 'blue', 'yellow', 'green', 'purple',
+#               'gray', 'brown', 'gold', 'silver', 'cream', 'beige', 'vermilion']
+#     metadata_color_ = pd.DataFrame(np.zeros((len(data), len(color_list))))
+#     for i in range(len(data)):
+#         word_list2 = set([inflection.singularize(x.lower()) for x in
+#                           ' '.join(list(data['metadata_annots_top_desc'][i])).split(' ')])
+#         for c in range(len(color_list)):
+#             metadata_color_.iloc[i, c] = int(color_list[c].lower() in word_list2)
+#     metadata_color_.columns = ['metadata_' + x for x in color_list]
+#     data = pd.concat([data, metadata_color_], axis=1)
+    return data
+
+def name_feature(train, test, model):
+    train['Name'].fillna('No Name', inplace=True)
+    train[train.Name == 'No Name Yet']['Name'] = 'No Name'
+    # train['Name_3ch'] = 0
+    # train[train['Name'].apply(lambda x: len(str(x))) == 3]['Name3ch'] = 1
+    # train['Name_2ch'] = 0
+    # train[train['Name'].apply(lambda x: len(str(x))) < 3]['Name2ch'] = 1
+    test['Name'].fillna('No Name', inplace=True)
+    test[test.Name == 'No Name Yet']['Name'] = 'No Name'
+    # test['Name_3ch'] = 0
+    # test[test['Name'].apply(lambda x: len(str(x))) == 3]['Name3ch'] = 1
+    # test['Name_2ch'] = 0
+    # test[test['Name'].apply(lambda x: len(str(x))) < 3]['Name2ch'] = 1
+    train, test = name_word2vec(train, test, model)
+    return train, test
 
 def fill_and_drop_feature(data):
     data.drop(['main_breed_BreedName', 'second_breed_BreedName'], axis=1, inplace=True)
@@ -66,16 +192,20 @@ def add_feature(data):
     return data
 
 
-def agg_feature(data, data_metadata, data_sentiment):
+def agg_feature(data, data_metadata, data_sentiment, model, labels_breed):
     aggregates = ['sum', 'mean', 'var']
     sent_agg = ['sum']
 
     # data
     data_metadata_desc = data_metadata.groupby(['PetID'])['metadata_annots_top_desc'].unique()
     data_metadata_desc = data_metadata_desc.reset_index()
+    data_metadata_desc = metadata_color(data_metadata_desc)
     data_metadata_desc[
         'metadata_annots_top_desc'] = data_metadata_desc[
         'metadata_annots_top_desc'].apply(lambda x: ' '.join(x))
+    data_metadata_desc = metadata_desc_word2vec(data_metadata_desc, model)
+    data_metadata_desc = metadata_Breed(data_metadata_desc, labels_breed)
+
 
     prefix = 'metadata'
     data_metadata_gr = data_metadata.drop(['metadata_annots_top_desc'], axis=1)
@@ -91,6 +221,8 @@ def agg_feature(data, data_metadata, data_sentiment):
     data_sentiment_desc[
         'sentiment_entities'] = data_sentiment_desc[
         'sentiment_entities'].apply(lambda x: ' '.join(x))
+    data_sentiment_desc = sentiment_entities_word2vec(data_sentiment_desc, model)
+
 
     prefix = 'sentiment'
     data_sentiment_gr = data_sentiment.drop(['sentiment_entities'], axis=1)
@@ -136,10 +268,9 @@ def merge_labels_state(train_proc, test_proc, labels_state):
     test_proc = pd.concat([test_proc, test_state_main], axis=1)
     return train_proc, test_proc
 
-
-def adopt_svd(train_feats, test_feats):
-    n_components = 32
-    svd_ = TruncatedSVD(n_components=n_components, random_state=1337)
+def adopt_svd(train_feats, test_feats, random_state=1337):
+    n_components = 16
+    svd_ = TruncatedSVD(n_components=n_components, random_state=random_state)
 
     features_df = pd.concat([train_feats, test_feats], axis=0)
     features = features_df[[f'pic_{i}' for i in range(256)]].values

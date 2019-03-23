@@ -3,7 +3,9 @@
 *.zip
 */input/*
 *.pkl
-
+*.txt
+*.bin
+*.vec
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

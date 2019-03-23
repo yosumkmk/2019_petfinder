@@ -23,7 +23,7 @@ from sklearn.preprocessing import MinMaxScaler
 from src.data.make_dataset import read_train_data, read_test_data
 from src.models.densenet import densenet_model, predict_using_img
 from src.features.build_features import adopt_svd, agg_feature, merge_labels_breed, merge_labels_state, add_feature
-from src.features.build_features import fill_and_drop_feature, fill_and_drop_feature_end
+from src.features.build_features import fill_and_drop_feature, fill_and_drop_feature_end, name_feature, metadata_color
 from src.features.word_parse import extract_additional_features, parse_tfidf
 from src.features.Img_parse import agg_img_feature
 from src.models.xgb_model import run_xgb, xgb_tuning
@@ -32,6 +32,7 @@ from src.result.summarize_result import storage_src
 from src.submission.submit_data import submit
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 
+import gensim
 import input
 
 np.random.seed(seed=1337)
@@ -58,15 +59,15 @@ xgb_params = {
 }
 
 space_params = {
-    'n_estimators': hp.quniform('n_estimators', 100, 1000, 1),
-    'eta': hp.quniform('eta', 0.005, 0.5, 0.001),
+    'n_estimators': hp.quniform('n_estimators', 600, 1200, 1),
+    'eta': hp.quniform('eta', 0.005, 0.02, 0.001),
     # A problem with max_depth casted to float instead of int with
     # the hp.quniform method.
     'max_depth': hp.choice('max_depth', np.arange(1, 14, dtype=int)),
     'min_child_weight': hp.quniform('min_child_weight', 1, 6, 0.5),
-    'subsample': hp.quniform('subsample', 0.5, 1, 0.02),
-    'gamma': hp.quniform('gamma', 0.5, 1, 0.05),
-    'colsample_bytree': hp.quniform('colsample_bytree', 0.5, 1, 0.01),
+    'subsample': hp.quniform('subsample', 0.8, 1, 0.02),
+    'gamma': hp.quniform('gamma', 0.8, 1, 0.01),
+    'colsample_bytree': hp.quniform('colsample_bytree', 0.2, 0.6, 0.01),
     'eval_metric': 'rmse',
     'object': 'reg:squarederror',
     # Increase this number if you have more cores. Otherwise, remove it and it will default
@@ -86,17 +87,20 @@ densenet_predict = False
 exe_extract_additional_feature = False
 adoption_shuffle = False
 tuning_model = False
-adoption_change =True
+adoption_change =False
 
 def storage_process(submission, str_metric_score, score, second_score, feature_score):
     submit(submission, str_metric_score)
-    comment = 'adoption replace,'
+    comment = 'metadata breed 2(1)'
     storage_src(str_metric_score, score, second_score, feature_score, comment, adoption_shuffle)
 
 
 def main():
     train = read_train_data(path=os.path.join(input.__path__[0], 'petfinder-adoption-prediction/train/'))
     test = read_test_data(path=os.path.join(input.__path__[0], 'petfinder-adoption-prediction/test/'))
+    model = gensim.models.KeyedVectors.load_word2vec_format(
+        os.path.join(input.__path__[0], 'word2vec/GoogleNews-vectors-negative300.bin'), binary=True)
+    train, test = name_feature(train, test, model)
     if adoption_shuffle:
         train['AdoptionSpeed'] = random.sample(train['AdoptionSpeed'].values.tolist(), len(train))
     if adoption_change:
@@ -179,8 +183,8 @@ def main():
             test_dfs_sentiment = pickle.load(f)
 
     # ### group extracted features by PetID:
-    train_proc = agg_feature(train, train_dfs_metadata, train_dfs_sentiment)
-    test_proc = agg_feature(test, test_dfs_metadata, test_dfs_sentiment)
+    train_proc = agg_feature(train, train_dfs_metadata, train_dfs_sentiment, model, labels_breed)
+    test_proc = agg_feature(test, test_dfs_metadata, test_dfs_sentiment, model, labels_breed)
     train_proc = merge_labels_breed(train_proc, labels_breed)
     test_proc = merge_labels_breed(test_proc, labels_breed)
     train_proc, test_proc = merge_labels_state(train_proc, test_proc, labels_state)
@@ -252,20 +256,39 @@ def main():
         print(best_params)
     else:
         model, oof_train, oof_test, feature_score = run_xgb(xgb_params, X_train_non_null, X_test_non_null)
-        mmscaler = MinMaxScaler()
-        oof_train = mmscaler.fit_transform(oof_train) * 4
-        oof_test = mmscaler.transform(oof_test) * 4
-        optR = OptimizedRounder()
-        optR.fit(oof_train, X_train['AdoptionSpeed'].values)
-        coefficients = optR.coefficients()
-        valid_pred = optR.predict(oof_train, coefficients)
-        qwk = quadratic_weighted_kappa(X_train['AdoptionSpeed'].values, valid_pred)
-        print("QWK = ", qwk)
+        if adoption_change:
+            mmscaler = MinMaxScaler()
+            train_test_min = min(oof_train.min(), oof_test.min())
+            train_test_max = min(oof_train.max(), oof_test.max())
+            oof_train = (oof_train - train_test_min) / (train_test_max - train_test_min) * 4
+            oof_test = (oof_test - train_test_min) / (train_test_max - train_test_min) * 4
+            X_train['AdoptionSpeed'].replace({0:0, 7:1, 30:2, 90:3, 200:4}, inplace=True)
 
-        coefficients_ = coefficients.copy()
-        coefficients_[0] = 1.66
-        coefficients_[1] = 2.13
-        coefficients_[3] = 2.85
+            optR = OptimizedRounder()
+            optR.fit(oof_train, X_train['AdoptionSpeed'].values)
+            coefficients = optR.coefficients()
+            valid_pred = optR.predict(oof_train, coefficients)
+            qwk = quadratic_weighted_kappa(X_train['AdoptionSpeed'].values, valid_pred)
+            print("QWK = ", qwk)
+
+            coefficients_ = coefficients.copy()
+            coefficients_[0] = 0.75
+            coefficients_[1] = 1.16
+            coefficients_[2] = 1.7
+            coefficients_[3] = 2.12
+        else:
+            optR = OptimizedRounder()
+            optR.fit(oof_train, X_train['AdoptionSpeed'].values)
+            coefficients = optR.coefficients()
+            valid_pred = optR.predict(oof_train, coefficients)
+            qwk = quadratic_weighted_kappa(X_train['AdoptionSpeed'].values, valid_pred)
+            print("QWK = ", qwk)
+
+            coefficients_ = coefficients.copy()
+            coefficients_[0] = 1.62
+            coefficients_[1] = 2.1
+            coefficients_[3] = 2.9
+
         train_predictions = optR.predict(oof_train, coefficients_).astype(np.int8)
         test_predictions = optR.predict(oof_test.mean(axis=1), coefficients_).astype(np.int8)
 
